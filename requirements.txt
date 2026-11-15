@@ -1,1 +1,2 @@
-# TODO: agregar aqui dependencias si se usan librerias externas (ej. cryptography)
+# Dependencias del proyecto
+cryptography>=44
