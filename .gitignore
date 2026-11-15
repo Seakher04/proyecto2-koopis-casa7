@@ -11,3 +11,5 @@ env/
 Thumbs.db
 .vscode/
 .idea/
+CONTEXTO_P3.md
+pruebas/local_*.py
