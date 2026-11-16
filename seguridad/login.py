@@ -51,6 +51,10 @@ def agregar_usuario(ruta, usuario, clave, perfil):
         raise ValueError(f"La clave debe tener entre {MIN_CLAVE_NUEVA} y {MAX_CLAVE} caracteres")
     if os.path.exists(ruta) and usuario in cargar_usuarios(ruta):
         raise ValueError("Ese usuario ya existe")
+    # En un clon nuevo la carpeta (servidor/datos) no existe: se crea si falta
+    carpeta = os.path.dirname(ruta)
+    if carpeta:
+        os.makedirs(carpeta, exist_ok=True)
     sal = secrets.token_bytes(LARGO_SAL)
     with open(ruta, "a", encoding="utf-8") as archivo:
         archivo.write(f"{usuario}:{perfil}:{sal.hex()}:{hash_clave(clave, sal).hex()}\n")
