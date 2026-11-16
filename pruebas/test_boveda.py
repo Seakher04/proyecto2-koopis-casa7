@@ -1,28 +1,34 @@
 import json
 import os
 import secrets
+import shutil
 import socket
+import tempfile
 import threading
 import unittest
 
+from seguridad.cifrado import cifrar, descifrar
+from seguridad.handshake import G as DH_G
+from seguridad.handshake import P as DH_P
+from seguridad.handshake import derivar_claves
 from seguridad.integridad import calcular_hmac, verificar_hmac
+from seguridad.login import agregar_usuario, cargar_usuarios
 from servidor.boveda import (
-    DH_G,
-    DH_P,
     TIPO_COMANDO,
     TIPO_ERROR,
     TIPO_HANDSHAKE,
     TIPO_LOGIN,
     TIPO_RESPUESTA_OK,
-    _cifrar,
     _construir_cabecera,
-    _derivar_claves,
-    _descifrar,
     _enviar_paquete,
     _leer_paquete,
     manejar_cliente,
 )
 from servidor.comandos import RUTA_BOVEDA
+
+# Usuarios de prueba: se crean en una carpeta temporal, nunca en servidor/datos
+CLAVE_JEFE = "clave-de-prueba-jefe"
+CLAVE_INTEGRANTE = "clave-de-prueba-integrante"
 
 
 class ClientePrueba:
@@ -64,7 +70,7 @@ class ClientePrueba:
 
         pub_b = int(datos["B"], 16)
         secreto = pow(pub_b, priv_a, DH_P)
-        self.k_cif, self.k_int = _derivar_claves(secreto)
+        self.k_cif, self.k_int = derivar_claves(secreto)
         return tipo, datos
 
     def enviar_cifrado(
@@ -83,7 +89,7 @@ class ClientePrueba:
 
         iv = os.urandom(16)
         payload_bytes = json.dumps(payload_dict, ensure_ascii=False).encode("utf-8")
-        payload_cifrado = _cifrar(payload_bytes, self.k_cif, iv)
+        payload_cifrado = cifrar(payload_bytes, self.k_cif, iv)
         cabecera = _construir_cabecera(len(payload_cifrado), tipo, nonce_actual, iv)
         firma = bytearray(calcular_hmac(cabecera, payload_cifrado, self.k_int))
         if alterar_hmac:
@@ -97,11 +103,23 @@ class ClientePrueba:
         assert self.k_cif is not None and self.k_int is not None
         cabecera, tipo, _nonce_srv, iv, payload_cifrado, hmac_rec = paquete
         assert verificar_hmac(cabecera, payload_cifrado, hmac_rec, self.k_int)
-        texto_plano = _descifrar(payload_cifrado, self.k_cif, iv)
+        texto_plano = descifrar(payload_cifrado, self.k_cif, iv)
         return tipo, json.loads(texto_plano.decode("utf-8"))
 
 
 class TestBovedaIntegracion(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.carpeta_usuarios = tempfile.mkdtemp()
+        ruta = os.path.join(cls.carpeta_usuarios, "usuarios.txt")
+        agregar_usuario(ruta, "jefe", CLAVE_JEFE, "jefe")
+        agregar_usuario(ruta, "integrante", CLAVE_INTEGRANTE, "integrante")
+        cls.usuarios = cargar_usuarios(ruta)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        shutil.rmtree(cls.carpeta_usuarios, ignore_errors=True)
+
     def setUp(self) -> None:
         RUTA_BOVEDA.parent.mkdir(parents=True, exist_ok=True)
         RUTA_BOVEDA.write_text("{}", encoding="utf-8")
@@ -122,7 +140,7 @@ class TestBovedaIntegracion(unittest.TestCase):
                 conn, _ = self.servidor_sock.accept()
             except OSError:
                 break
-            manejar_cliente(conn, self.servidor_sock)
+            manejar_cliente(conn, self.servidor_sock, self.usuarios)
 
     def tearDown(self) -> None:
         self._detener = True
@@ -185,7 +203,7 @@ class TestBovedaIntegracion(unittest.TestCase):
 
             # Primer login exitoso
             cliente.enviar_cifrado(
-                TIPO_LOGIN, {"usuario": "integrante", "password": "int123"}
+                TIPO_LOGIN, {"usuario": "integrante", "password": CLAVE_INTEGRANTE}
             )
             res1 = cliente.recibir_cifrado()
             self.assertIsNotNone(res1)
@@ -197,7 +215,7 @@ class TestBovedaIntegracion(unittest.TestCase):
 
             # Segundo login en la misma sesión -> 0x05 SESION sin desconectar
             cliente.enviar_cifrado(
-                TIPO_LOGIN, {"usuario": "integrante", "password": "int123"}
+                TIPO_LOGIN, {"usuario": "integrante", "password": CLAVE_INTEGRANTE}
             )
             res2 = cliente.recibir_cifrado()
             self.assertIsNotNone(res2)
@@ -251,7 +269,7 @@ class TestBovedaIntegracion(unittest.TestCase):
             # El handshake usó nonce=1; enviamos nonce=99 en lugar de 2
             cliente.enviar_cifrado(
                 TIPO_LOGIN,
-                {"usuario": "jefe", "password": "jefe123"},
+                {"usuario": "jefe", "password": CLAVE_JEFE},
                 nonce_override=99,
             )
             res = cliente.recibir_cifrado()
@@ -271,7 +289,7 @@ class TestBovedaIntegracion(unittest.TestCase):
 
             cliente.enviar_cifrado(
                 TIPO_LOGIN,
-                {"usuario": "jefe", "password": "jefe123"},
+                {"usuario": "jefe", "password": CLAVE_JEFE},
                 alterar_hmac=True,
             )
             res = cliente.recibir_cifrado()
@@ -297,7 +315,7 @@ class TestBovedaIntegracion(unittest.TestCase):
 
             # 2. Login 0x02 como jefe
             cliente.enviar_cifrado(
-                TIPO_LOGIN, {"usuario": "jefe", "password": "jefe123"}
+                TIPO_LOGIN, {"usuario": "jefe", "password": CLAVE_JEFE}
             )
             res_login = cliente.recibir_cifrado()
             if res_login is None:
