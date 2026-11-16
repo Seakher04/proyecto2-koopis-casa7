@@ -14,3 +14,6 @@ Thumbs.db
 CONTEXTO_P3.md
 pruebas/local_*.py
 servidor/datos/boveda.json
+# Datos sensibles del servidor (se generan en la maquina del lab)
+servidor/datos/usuarios.txt
+servidor/datos/secretos.txt
