@@ -1,22 +1,25 @@
 import json
+import os
 import socket
-import struct
 import sys
+import threading
+import time
 from pathlib import Path
 
+from red.defensa import RegistroDefensivo
+from red.protocolo import (
+    HOST_DEFECTO,
+    PUERTO_DEFECTO,
+    ErrorProtocolo,
+    empaquetar_cabecera,
+    recibir_trama,
+)
+from red.secuencia import ControlSecuencia
 from seguridad.cifrado import cifrar, descifrar, nuevo_iv
 from seguridad.handshake import procesar_handshake
 from seguridad.integridad import calcular_hmac, verificar_hmac
 from seguridad.login import cargar_usuarios, verificar_credenciales
 from servidor.comandos import procesar_comando
-
-HOST_DEFECTO = "0.0.0.0"
-PUERTO_DEFECTO = 7777
-
-FORMATO_CABECERA = "!IBQ16s"
-LONGITUD_CABECERA = 29
-LONGITUD_HMAC = 32
-MAX_PAYLOAD = 16384
 
 TIPO_HANDSHAKE = 0x01
 TIPO_LOGIN = 0x02
@@ -26,45 +29,32 @@ TIPO_ERROR = 0x05
 
 RUTA_USUARIOS = Path(__file__).resolve().parent / "datos" / "usuarios.txt"
 
+# Segundos sin recibir nada antes de cerrar: menos antes del login, más con sesión iniciada
+TIEMPO_SIN_SESION = 60
+TIEMPO_CON_SESION = 300
+
+# Los comandos leen y escriben boveda.json: uno a la vez entre todos los hilos
+_candado_boveda = threading.Lock()
+
 
 # =====================================================================
-# Adaptadores provisionales para P1 (red)
+# Paquetes sobre la capa de red (red/protocolo.py)
 # =====================================================================
-
-
-def _leer_exacto(sock: socket.socket, n: int) -> bytes | None:
-    datos = bytearray()
-    while len(datos) < n:
-        fragmento = sock.recv(n - len(datos))
-        if not fragmento:
-            return None
-        datos.extend(fragmento)
-    return bytes(datos)
 
 
 def _construir_cabecera(longitud: int, tipo: int, nonce: int, iv: bytes) -> bytes:
-    return struct.pack(FORMATO_CABECERA, longitud, tipo, nonce, iv)
-
-
-def _desempaquetar_cabecera(cabecera: bytes) -> tuple[int, int, int, bytes]:
-    return struct.unpack(FORMATO_CABECERA, cabecera)
+    return empaquetar_cabecera(longitud, tipo, nonce, iv)
 
 
 def _leer_paquete(
     sock: socket.socket,
 ) -> tuple[bytes, int, int, bytes, bytes, bytes] | None:
-    cabecera = _leer_exacto(sock, LONGITUD_CABECERA)
-    if cabecera is None:
+    """Lee una trama completa (lo usan las pruebas). None si se cerró o la trama no sirve."""
+    try:
+        tipo, nonce, iv, payload_cifrado, hmac_recibido = recibir_trama(sock)
+    except (OSError, ErrorProtocolo):
         return None
-    longitud, tipo, nonce, iv = _desempaquetar_cabecera(cabecera)
-    if longitud > MAX_PAYLOAD:
-        return None
-    payload_cifrado = _leer_exacto(sock, longitud) if longitud > 0 else b""
-    if payload_cifrado is None:
-        return None
-    hmac_recibido = _leer_exacto(sock, LONGITUD_HMAC)
-    if hmac_recibido is None:
-        return None
+    cabecera = _construir_cabecera(len(payload_cifrado), tipo, nonce, iv)
     return cabecera, tipo, nonce, iv, payload_cifrado, hmac_recibido
 
 
@@ -112,13 +102,14 @@ def manejar_cliente(
     conn: socket.socket,
     servidor_sock: socket.socket | None = None,
     usuarios: dict | None = None,
+    ip: str | None = None,
+    defensa: RegistroDefensivo | None = None,
 ) -> None:
     usuarios = usuarios or {}
     handshake_completado = False
     k_cif: bytes | None = None
     k_int: bytes | None = None
-    ultimo_cliente: int | None = None
-    nonce_servidor = 0
+    secuencia = ControlSecuencia()
 
     sesion = {
         "autenticado": False,
@@ -128,32 +119,42 @@ def manejar_cliente(
     }
 
     def enviar_respuesta(tipo: int, payload: dict) -> None:
-        nonlocal nonce_servidor
-        nonce_servidor += 1
-        _enviar_paquete(conn, tipo, nonce_servidor, payload, k_cif, k_int)
+        _enviar_paquete(conn, tipo, secuencia.siguiente_envio(), payload, k_cif, k_int)
 
+    def anotar_falta(motivo: str) -> None:
+        """Deja el intento inválido en la bitácora de red/defensa.py y frena un poco al cliente."""
+        if defensa is not None and ip is not None:
+            time.sleep(defensa.registrar_anomalia(ip, motivo))
+
+    conn.settimeout(TIEMPO_SIN_SESION)
     try:
         while True:
-            paquete = _leer_paquete(conn)
-            if paquete is None:
+            try:
+                tipo, nonce, iv, payload_cifrado, hmac_recibido = recibir_trama(conn)
+            except ErrorProtocolo:
+                anotar_falta("trama_invalida")
                 break
-
-            cabecera, tipo, nonce, iv, payload_cifrado, hmac_recibido = paquete
+            except OSError:
+                # Conexión cerrada, cortada de golpe o sin actividad
+                break
+            cabecera = _construir_cabecera(len(payload_cifrado), tipo, nonce, iv)
 
             # 1. Antes del Handshake
             if not handshake_completado:
-                if tipo != TIPO_HANDSHAKE:
-                    break
-                if nonce != 1 or iv != b"\x00" * 16:
-                    break
-                if not verificar_hmac(cabecera, payload_cifrado, hmac_recibido, b""):
+                if (
+                    tipo != TIPO_HANDSHAKE
+                    or iv != b"\x00" * 16
+                    or not secuencia.validar_recepcion(nonce)
+                    or not verificar_hmac(cabecera, payload_cifrado, hmac_recibido, b"")
+                ):
+                    anotar_falta("handshake_invalido")
                     break
                 resultado_hs = procesar_handshake(payload_cifrado)
                 if resultado_hs is None:
+                    anotar_falta("handshake_invalido")
                     break
 
                 pub_b_hex, k_cif, k_int = resultado_hs
-                ultimo_cliente = nonce
                 handshake_completado = True
                 enviar_respuesta(TIPO_HANDSHAKE, {"grupo": 14, "B": pub_b_hex})
                 continue
@@ -167,9 +168,10 @@ def manejar_cliente(
                         "descripcion": "El handshake ya fue completado",
                     },
                 )
+                anotar_falta("handshake_duplicado")
                 break
 
-            if ultimo_cliente is None or nonce != ultimo_cliente + 1:
+            if not secuencia.validar_recepcion(nonce):
                 enviar_respuesta(
                     TIPO_ERROR,
                     {
@@ -177,8 +179,8 @@ def manejar_cliente(
                         "descripcion": "Número de secuencia fuera de orden",
                     },
                 )
+                anotar_falta("nonce_invalido")
                 break
-            ultimo_cliente = nonce
 
             if k_int is None or not verificar_hmac(
                 cabecera, payload_cifrado, hmac_recibido, k_int
@@ -190,6 +192,7 @@ def manejar_cliente(
                         "descripcion": "Firma HMAC inválida",
                     },
                 )
+                anotar_falta("hmac_invalido")
                 break
 
             try:
@@ -199,7 +202,7 @@ def manejar_cliente(
                 payload_dict = json.loads(texto_plano.decode("utf-8"))
                 if not isinstance(payload_dict, dict):
                     raise TypeError("El JSON descifrado no es un objeto")
-            except (UnicodeDecodeError, TypeError, ValueError):
+            except (UnicodeDecodeError, TypeError, ValueError, RecursionError):
                 enviar_respuesta(
                     TIPO_ERROR,
                     {
@@ -207,6 +210,7 @@ def manejar_cliente(
                         "descripcion": "El payload descifrado no es JSON válido",
                     },
                 )
+                anotar_falta("formato_invalido")
                 break
 
             # 3. Flujo de Login (0x02)
@@ -234,12 +238,14 @@ def manejar_cliente(
                             "descripcion": "Credenciales inválidas",
                         },
                     )
+                    anotar_falta("credenciales")
                     if sesion["intentos_fallidos"] >= 3:
                         break
                     continue
 
                 sesion["autenticado"] = True
                 sesion["perfil"] = perfil
+                conn.settimeout(TIEMPO_CON_SESION)
                 enviar_respuesta(
                     TIPO_RESPUESTA_OK,
                     {
@@ -252,7 +258,8 @@ def manejar_cliente(
 
             # 4. Flujo de Comandos (0x03)
             if tipo == TIPO_COMANDO:
-                tipo_resp, dict_resp = procesar_comando(payload_dict, sesion)
+                with _candado_boveda:
+                    tipo_resp, dict_resp = procesar_comando(payload_dict, sesion)
                 enviar_respuesta(tipo_resp, dict_resp)
 
                 if sesion.get("cerrar_servidor"):
@@ -270,6 +277,7 @@ def manejar_cliente(
                     "descripcion": "Tipo de mensaje no soportado",
                 },
             )
+            anotar_falta("tipo_no_soportado")
             break
     finally:
         try:
@@ -278,17 +286,52 @@ def manejar_cliente(
             pass
 
 
+def _atender(
+    conn: socket.socket,
+    ip: str,
+    servidor_sock: socket.socket,
+    usuarios: dict,
+    defensa: RegistroDefensivo,
+) -> None:
+    """Hilo de un custodio. Un error de un cliente cierra solo su conexión, nunca la Bóveda."""
+    try:
+        manejar_cliente(conn, servidor_sock, usuarios, ip, defensa)
+    except SystemExit:
+        # Cierre de emergencia: se termina el proceso entero, con todas las conexiones adentro
+        print("[Boveda] Cierre de emergencia ejecutado", flush=True)
+        os._exit(0)
+    except Exception as error:
+        defensa.registrar_anomalia(ip, "excepcion", type(error).__name__)
+    finally:
+        defensa.liberar_conexion(ip)
+
+
 def iniciar_servidor(host: str = HOST_DEFECTO, puerto: int = PUERTO_DEFECTO) -> None:
     usuarios = _cargar_usuarios_o_salir()
+    defensa = RegistroDefensivo()
     servidor_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     servidor_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     servidor_sock.bind((host, puerto))
-    servidor_sock.listen(5)
+    servidor_sock.listen(defensa.max_conexiones)
+    print(f"[Boveda] Escuchando en {host}:{puerto} ({len(usuarios)} usuarios)", flush=True)
 
     try:
         while True:
-            conn, _ = servidor_sock.accept()
-            manejar_cliente(conn, servidor_sock, usuarios)
+            try:
+                conn, (ip, _puerto) = servidor_sock.accept()
+            except OSError:
+                if servidor_sock.fileno() == -1:
+                    break
+                continue
+            # red/defensa.py decide si la IP está bloqueada o ya tiene demasiadas conexiones
+            if not defensa.adquirir_conexion(ip):
+                conn.close()
+                continue
+            threading.Thread(
+                target=_atender,
+                args=(conn, ip, servidor_sock, usuarios, defensa),
+                daemon=True,
+            ).start()
     finally:
         try:
             servidor_sock.close()
