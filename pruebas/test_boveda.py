@@ -7,18 +7,21 @@ import tempfile
 import threading
 import unittest
 
+from red.defensa import RegistroDefensivo
 from seguridad.cifrado import cifrar, descifrar
 from seguridad.handshake import G as DH_G
 from seguridad.handshake import P as DH_P
 from seguridad.handshake import derivar_claves
 from seguridad.integridad import calcular_hmac, verificar_hmac
 from seguridad.login import agregar_usuario, cargar_usuarios
+import servidor.boveda as mod_boveda
 from servidor.boveda import (
     TIPO_COMANDO,
     TIPO_ERROR,
     TIPO_HANDSHAKE,
     TIPO_LOGIN,
     TIPO_RESPUESTA_OK,
+    _atender,
     _construir_cabecera,
     _enviar_paquete,
     _leer_paquete,
@@ -29,6 +32,7 @@ from servidor.comandos import RUTA_BOVEDA
 # Usuarios de prueba: se crean en una carpeta temporal, nunca en servidor/datos
 CLAVE_JEFE = "clave-de-prueba-jefe"
 CLAVE_INTEGRANTE = "clave-de-prueba-integrante"
+CLAVE_HACINADO = "clave-de-prueba-hacinado"
 
 
 class ClientePrueba:
@@ -114,6 +118,7 @@ class TestBovedaIntegracion(unittest.TestCase):
         ruta = os.path.join(cls.carpeta_usuarios, "usuarios.txt")
         agregar_usuario(ruta, "jefe", CLAVE_JEFE, "jefe")
         agregar_usuario(ruta, "integrante", CLAVE_INTEGRANTE, "integrante")
+        agregar_usuario(ruta, "hacinado", CLAVE_HACINADO, "hacinado")
         cls.usuarios = cargar_usuarios(ruta)
 
     @classmethod
@@ -121,6 +126,7 @@ class TestBovedaIntegracion(unittest.TestCase):
         shutil.rmtree(cls.carpeta_usuarios, ignore_errors=True)
 
     def setUp(self) -> None:
+        mod_boveda._cierre_en_curso = False
         RUTA_BOVEDA.parent.mkdir(parents=True, exist_ok=True)
         RUTA_BOVEDA.write_text("{}", encoding="utf-8")
 
@@ -149,6 +155,7 @@ class TestBovedaIntegracion(unittest.TestCase):
         except OSError:
             pass
         self.hilo_servidor.join(timeout=2.0)
+        mod_boveda._cierre_en_curso = False
         RUTA_BOVEDA.parent.mkdir(parents=True, exist_ok=True)
         RUTA_BOVEDA.write_text("{}", encoding="utf-8")
 
@@ -203,7 +210,7 @@ class TestBovedaIntegracion(unittest.TestCase):
 
             # Primer login exitoso
             cliente.enviar_cifrado(
-                TIPO_LOGIN, {"usuario": "integrante", "password": CLAVE_INTEGRANTE}
+                TIPO_LOGIN, {"usuario": "integrante", "clave": CLAVE_INTEGRANTE}
             )
             res1 = cliente.recibir_cifrado()
             self.assertIsNotNone(res1)
@@ -215,7 +222,7 @@ class TestBovedaIntegracion(unittest.TestCase):
 
             # Segundo login en la misma sesión -> 0x05 SESION sin desconectar
             cliente.enviar_cifrado(
-                TIPO_LOGIN, {"usuario": "integrante", "password": CLAVE_INTEGRANTE}
+                TIPO_LOGIN, {"usuario": "integrante", "clave": CLAVE_INTEGRANTE}
             )
             res2 = cliente.recibir_cifrado()
             self.assertIsNotNone(res2)
@@ -246,7 +253,7 @@ class TestBovedaIntegracion(unittest.TestCase):
 
             for intento in range(1, 4):
                 cliente.enviar_cifrado(
-                    TIPO_LOGIN, {"usuario": "jefe", "password": f"erronea_{intento}"}
+                    TIPO_LOGIN, {"usuario": "jefe", "clave": f"erronea_{intento}"}
                 )
                 res = cliente.recibir_cifrado()
                 if res is None:
@@ -269,7 +276,7 @@ class TestBovedaIntegracion(unittest.TestCase):
             # El handshake usó nonce=1; enviamos nonce=99 en lugar de 2
             cliente.enviar_cifrado(
                 TIPO_LOGIN,
-                {"usuario": "jefe", "password": CLAVE_JEFE},
+                {"usuario": "jefe", "clave": CLAVE_JEFE},
                 nonce_override=99,
             )
             res = cliente.recibir_cifrado()
@@ -289,7 +296,7 @@ class TestBovedaIntegracion(unittest.TestCase):
 
             cliente.enviar_cifrado(
                 TIPO_LOGIN,
-                {"usuario": "jefe", "password": CLAVE_JEFE},
+                {"usuario": "jefe", "clave": CLAVE_JEFE},
                 alterar_hmac=True,
             )
             res = cliente.recibir_cifrado()
@@ -315,7 +322,7 @@ class TestBovedaIntegracion(unittest.TestCase):
 
             # 2. Login 0x02 como jefe
             cliente.enviar_cifrado(
-                TIPO_LOGIN, {"usuario": "jefe", "password": CLAVE_JEFE}
+                TIPO_LOGIN, {"usuario": "jefe", "clave": CLAVE_JEFE}
             )
             res_login = cliente.recibir_cifrado()
             if res_login is None:
@@ -366,6 +373,134 @@ class TestBovedaIntegracion(unittest.TestCase):
             )
         finally:
             cliente.cerrar()
+
+    def test_perfil_hacinado_autentica_pero_recibe_no_autorizado_en_todos_los_comandos(self) -> None:
+        cliente = ClientePrueba("127.0.0.1", self.puerto)
+        try:
+            cliente.realizar_handshake()
+            cliente.enviar_cifrado(
+                TIPO_LOGIN, {"usuario": "hacinado", "clave": CLAVE_HACINADO}
+            )
+            res_login = cliente.recibir_cifrado()
+            self.assertIsNotNone(res_login)
+            if res_login is None:
+                self.fail("No se recibió respuesta del servidor en login de hacinado")
+            self.assertEqual(res_login[0], TIPO_RESPUESTA_OK)
+            self.assertEqual(res_login[1]["perfil"], "hacinado")
+
+            comandos = [
+                {"comando": "consultar", "clave": ""},
+                {"comando": "agregar", "clave": "intruso", "valor": "1"},
+                {"comando": "borrar", "clave": "intruso"},
+                {"comando": "cierre_emergencia"},
+            ]
+            for payload in comandos:
+                with self.subTest(comando=payload["comando"]):
+                    cliente.enviar_cifrado(TIPO_COMANDO, payload)
+                    res = cliente.recibir_cifrado()
+                    self.assertIsNotNone(res)
+                    if res is None:
+                        self.fail(f"No se recibió respuesta en {payload['comando']}")
+                    self.assertEqual(res[0], TIPO_ERROR)
+                    self.assertEqual(res[1]["codigo"], "NO_AUTORIZADO")
+
+            self.assertEqual(
+                json.loads(RUTA_BOVEDA.read_text(encoding="utf-8")),
+                {},
+            )
+        finally:
+            cliente.cerrar()
+
+    def test_clientes_concurrentes_con_hilos_y_defensa(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_log:
+            defensa = RegistroDefensivo(ruta_log=os.path.join(tmp_log, "alertas.log"))
+            srv_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv_sock.bind(("127.0.0.1", 0))
+            srv_sock.listen(defensa.max_conexiones)
+            puerto_conc = srv_sock.getsockname()[1]
+
+            hilos_clientes: list[threading.Thread] = []
+            detener_conc = False
+
+            def aceptar_concurrente() -> None:
+                while not detener_conc:
+                    try:
+                        conn, (ip, _p) = srv_sock.accept()
+                    except OSError:
+                        break
+                    if not defensa.adquirir_conexion(ip):
+                        conn.close()
+                        continue
+                    t = threading.Thread(
+                        target=_atender,
+                        args=(conn, ip, srv_sock, self.usuarios, defensa),
+                        daemon=True,
+                    )
+                    hilos_clientes.append(t)
+                    t.start()
+
+            hilo_aceptar = threading.Thread(target=aceptar_concurrente, daemon=True)
+            hilo_aceptar.start()
+
+            cli_jefe = ClientePrueba("127.0.0.1", puerto_conc)
+            cli_int = ClientePrueba("127.0.0.1", puerto_conc)
+            try:
+                cli_jefe.realizar_handshake()
+                cli_int.realizar_handshake()
+
+                cli_jefe.enviar_cifrado(
+                    TIPO_LOGIN, {"usuario": "jefe", "clave": CLAVE_JEFE}
+                )
+                cli_int.enviar_cifrado(
+                    TIPO_LOGIN, {"usuario": "integrante", "clave": CLAVE_INTEGRANTE}
+                )
+                res_j = cli_jefe.recibir_cifrado()
+                res_i = cli_int.recibir_cifrado()
+                self.assertIsNotNone(res_j)
+                self.assertIsNotNone(res_i)
+                if res_j is None or res_i is None:
+                    self.fail("Falló el login concurrente")
+                self.assertEqual(res_j[0], TIPO_RESPUESTA_OK)
+                self.assertEqual(res_i[0], TIPO_RESPUESTA_OK)
+
+                cli_jefe.enviar_cifrado(
+                    TIPO_COMANDO, {"comando": "agregar", "clave": "k_jefe", "valor": "v1"}
+                )
+                cli_int.enviar_cifrado(
+                    TIPO_COMANDO, {"comando": "agregar", "clave": "k_int", "valor": "v2"}
+                )
+                add_j = cli_jefe.recibir_cifrado()
+                add_i = cli_int.recibir_cifrado()
+                self.assertIsNotNone(add_j)
+                self.assertIsNotNone(add_i)
+                if add_j is None or add_i is None:
+                    self.fail("Falló el comando agregar concurrente")
+                self.assertEqual(add_j[0], TIPO_RESPUESTA_OK)
+                self.assertEqual(add_i[0], TIPO_RESPUESTA_OK)
+
+                cli_int.enviar_cifrado(
+                    TIPO_COMANDO, {"comando": "consultar", "clave": ""}
+                )
+                cons = cli_int.recibir_cifrado()
+                self.assertIsNotNone(cons)
+                if cons is None:
+                    self.fail("Falló la consulta concurrente")
+                self.assertEqual(cons[0], TIPO_RESPUESTA_OK)
+                self.assertEqual(cons[1]["datos"], {"k_jefe": "v1", "k_int": "v2"})
+            finally:
+                cli_jefe.cerrar()
+                cli_int.cerrar()
+                detener_conc = True
+                try:
+                    srv_sock.close()
+                except OSError:
+                    pass
+                hilo_aceptar.join(timeout=2.0)
+                for t in hilos_clientes:
+                    t.join(timeout=2.0)
+
+            self.assertEqual(defensa._conexiones_totales, 0)
 
 
 if __name__ == "__main__":

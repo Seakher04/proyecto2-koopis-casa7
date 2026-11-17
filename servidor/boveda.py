@@ -12,6 +12,7 @@ from red.protocolo import (
     PUERTO_DEFECTO,
     ErrorProtocolo,
     empaquetar_cabecera,
+    enviar_trama,
     recibir_trama,
 )
 from red.secuencia import ControlSecuencia
@@ -35,6 +36,7 @@ TIEMPO_CON_SESION = 300
 
 # Los comandos leen y escriben boveda.json: uno a la vez entre todos los hilos
 _candado_boveda = threading.Lock()
+_cierre_en_curso = False
 
 
 # =====================================================================
@@ -80,7 +82,7 @@ def _enviar_paquete(
 
     cabecera = _construir_cabecera(len(payload_final), tipo, nonce, iv)
     firma = calcular_hmac(cabecera, payload_final, clave_hmac)
-    sock.sendall(cabecera + payload_final + firma)
+    enviar_trama(sock, tipo, nonce, iv, payload_final, firma)
 
 
 def _cargar_usuarios_o_salir() -> dict:
@@ -226,7 +228,7 @@ def manejar_cliente(
                     continue
 
                 usuario = payload_dict.get("usuario")
-                password = payload_dict.get("password", payload_dict.get("clave"))
+                password = payload_dict.get("clave", payload_dict.get("password"))
                 perfil = verificar_credenciales(usuarios, usuario, password)
 
                 if perfil is None:
@@ -258,15 +260,22 @@ def manejar_cliente(
 
             # 4. Flujo de Comandos (0x03)
             if tipo == TIPO_COMANDO:
+                global _cierre_en_curso
                 with _candado_boveda:
+                    if _cierre_en_curso:
+                        break
                     tipo_resp, dict_resp = procesar_comando(payload_dict, sesion)
+                    if sesion.get("cerrar_servidor"):
+                        _cierre_en_curso = True
+                        try:
+                            enviar_respuesta(tipo_resp, dict_resp)
+                        except OSError:
+                            pass
+                        conn.close()
+                        if servidor_sock is not None:
+                            servidor_sock.close()
+                        sys.exit(0)
                 enviar_respuesta(tipo_resp, dict_resp)
-
-                if sesion.get("cerrar_servidor"):
-                    conn.close()
-                    if servidor_sock is not None:
-                        servidor_sock.close()
-                    sys.exit(0)
                 continue
 
             # Cualquier otro tipo no esperado tras el handshake
@@ -307,6 +316,8 @@ def _atender(
 
 
 def iniciar_servidor(host: str = HOST_DEFECTO, puerto: int = PUERTO_DEFECTO) -> None:
+    global _cierre_en_curso
+    _cierre_en_curso = False
     usuarios = _cargar_usuarios_o_salir()
     defensa = RegistroDefensivo()
     servidor_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

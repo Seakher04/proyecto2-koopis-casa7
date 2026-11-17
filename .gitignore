@@ -17,3 +17,4 @@ servidor/datos/boveda.json
 # Datos sensibles del servidor (se generan en la maquina del lab)
 servidor/datos/usuarios.txt
 servidor/datos/secretos.txt
+*.pdf
