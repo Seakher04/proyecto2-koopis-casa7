@@ -32,7 +32,8 @@ Universidad de Costa Rica
     ├── test_seguridad.py
     ├── test_integridad.py
     ├── test_comandos.py
-    └── test_boveda.py
+    ├── test_boveda.py
+    └── test_custodio.py
 ```
 
 ## Requisitos e instalación
@@ -49,7 +50,7 @@ Desde la raíz del proyecto:
 
 ### 1. Crear usuarios de la Bóveda
 
-La Bóveda requiere que `servidor/datos/usuarios.txt` exista y tenga al menos un usuario antes de iniciar. Perfiles válidos: `jefe`, `integrante` y `hacinado`.
+La Bóveda requiere que `servidor/datos/usuarios.txt` exista y tenga al menos un usuario antes de iniciar. Perfiles válidos: `jefe`, `integrante` y `hacinado` (clave de mínimo 12 caracteres, o Enter para generar una aleatoria).
 
 ```bash
 python3 -m seguridad.login servidor/datos/usuarios.txt <usuario> <perfil>
