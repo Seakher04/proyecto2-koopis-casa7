@@ -38,22 +38,30 @@ Universidad de Costa Rica
 
 ## Requisitos e instalación
 
-Requiere Python 3 y la dependencia declarada en `requirements.txt`:
+Requiere **Python 3** (3.10+) y la dependencia declarada en `requirements.txt`:
 
 ```bash
+# Opcional (recomendado si el sistema restringe pip global):
+python3 -m venv .venv
+source .venv/bin/activate
+
 pip install -r requirements.txt
 ```
 
 ## Ejecución
 
-Desde la raíz del proyecto:
+Todos los comandos se ejecutan desde la raíz del repositorio:
 
 ### 1. Crear usuarios de la Bóveda
 
-La Bóveda requiere que `servidor/datos/usuarios.txt` exista y tenga al menos un usuario antes de iniciar. Perfiles válidos: `jefe`, `integrante` y `hacinado` (clave de mínimo 12 caracteres, o Enter para generar una aleatoria).
+La Bóveda requiere que `servidor/datos/usuarios.txt` exista y tenga al menos un usuario antes de iniciar (el archivo `servidor/datos/boveda.json` se crea automáticamente vacío `{}` si no existe).
+
+Perfiles válidos: `jefe`, `integrante` y `hacinado` (clave de 12 a 128 caracteres, o presionar **Enter** para generar una aleatoria):
 
 ```bash
-python3 -m seguridad.login servidor/datos/usuarios.txt <usuario> <perfil>
+python3 -m seguridad.login servidor/datos/usuarios.txt jefe1 jefe
+python3 -m seguridad.login servidor/datos/usuarios.txt custodio1 integrante
+python3 -m seguridad.login servidor/datos/usuarios.txt asilo1 hacinado
 ```
 
 ### 2. Levantar la Bóveda y conectar un Custodio
@@ -69,9 +77,29 @@ python3 -m cliente.custodio 127.0.0.1 7777
 python3 -m cliente.custodio <IP_SERVIDOR> 7777
 ```
 
+### 3. Flujo de uso en `cliente.custodio`
+
+1. Al conectar, el cliente realiza el **handshake Diffie-Hellman (`0x01`)** de forma automática.
+2. Solicita **usuario y clave** (`0x02`, máximo 3 intentos por conexión).
+3. Muestra el menú interactivo de comandos (`0x03`):
+   - `1. consultar`: solicita la clave a buscar (presionar **Enter** sin texto para listar toda la bóveda).
+   - `2. agregar`: solicita clave y valor de texto para guardar o actualizar.
+   - `3. borrar`: elimina una clave existente.
+   - `4. cierre_emergencia`: pide confirmación (`s/N`), vacía `boveda.json`, cierra todas las conexiones y detiene el servidor.
+   - `5. salir`: cierra la sesión del cliente.
+
+**Permisos por perfil:**
+
+| Comando | `jefe` | `integrante` | `hacinado` |
+| :--- | :---: | :---: | :---: |
+| `consultar` | Sí | Sí | No |
+| `agregar` | Sí | Sí | No |
+| `borrar` | Sí | No | No |
+| `cierre_emergencia` | Sí | No | No |
+
 ## Pruebas
 
-Para ejecutar todas las pruebas unitarias y de integración:
+Para ejecutar la suite completa de pruebas unitarias e integración (51 pruebas):
 
 ```bash
 python3 -m unittest discover -s pruebas -p "test_*.py" -v
