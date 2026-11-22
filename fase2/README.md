@@ -12,14 +12,32 @@
 ```text
 fase2/
 ├── README.md
+├── capturar.sh                 # Lanza Wireshark (o tcpdump) filtrado para casa7 o casa5
 ├── ataque_casa5/
-│   ├── exploits/           # Scripts / PoCs reproducibles contra Casa 5
-│   └── evidencia/          # Capturas de Wireshark y salidas del ataque
+│   ├── cliente_base_casa5.py   # Cliente base del protocolo La ratonera (TCP 6005)
+│   ├── exploits/               # Scripts / PoCs reproducibles contra Casa 5
+│   └── evidencia/              # Capturas de Wireshark y salidas del ataque
 └── defensa_casa7/
-    ├── preparar_boveda.py  # Inicializa/restaura usuarios.txt y boveda.json (+ respaldo)
-    ├── trafico_legitimo.py # Simula sesiones legitimas de Custodio (pruebas/fondo)
-    ├── analizar_log.py     # Resumen de alertas_red.log para el Post-mortem
-    └── evidencia/          # Copias de alertas_red.log y capturas de defensa
+    ├── preparar_boveda.py      # Inicializa/restaura usuarios.txt y boveda.json (+ respaldo)
+    ├── trafico_legitimo.py     # Simula sesiones legitimas de Custodio (pruebas/fondo)
+    ├── analizar_log.py         # Resumen de alertas_red.log para el Post-mortem
+    └── evidencia/              # Copias de alertas_red.log y capturas de defensa
+```
+
+## Captura rápida (`capturar.sh`)
+
+```bash
+./fase2/capturar.sh casa7              # Abre Wireshark (o tcpdump) en puerto 7777 -> defensa_casa7/evidencia/
+./fase2/capturar.sh casa5              # Abre Wireshark (o tcpdump) en puerto 6005 -> ataque_casa5/evidencia/
+./fase2/capturar.sh casa7 lo --cli     # Fuerza tcpdump en loopback (para ensayar en casa)
+```
+
+## Cliente base para Casa 5 (`ataque_casa5/cliente_base_casa5.py`)
+
+Implementa el protocolo público **La ratonera** (framing, Diffie-Hellman Grupo 14, AES-256-CBC + PKCS#7 y HMAC-SHA256). Antes de usarlo contra Casa 5, ajustar las constantes `# TODO` al inicio del archivo con las etiquetas del KDF y campos JSON que confirmen Casa 5 o la profesora:
+
+```bash
+python3 -m fase2.ataque_casa5.cliente_base_casa5 <IP_CASA5>
 ```
 
 ## Herramientas de defensa (`defensa_casa7/`)
