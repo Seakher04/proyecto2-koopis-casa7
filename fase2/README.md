@@ -16,7 +16,27 @@ fase2/
 │   ├── exploits/           # Scripts / PoCs reproducibles contra Casa 5
 │   └── evidencia/          # Capturas de Wireshark y salidas del ataque
 └── defensa_casa7/
+    ├── preparar_boveda.py  # Inicializa/restaura usuarios.txt y boveda.json (+ respaldo)
+    ├── trafico_legitimo.py # Simula sesiones legitimas de Custodio (pruebas/fondo)
+    ├── analizar_log.py     # Resumen de alertas_red.log para el Post-mortem
     └── evidencia/          # Copias de alertas_red.log y capturas de defensa
+```
+
+## Herramientas de defensa (`defensa_casa7/`)
+
+```bash
+# 1. Inicializar usuarios (jefe_casa7, custodio_casa7, asilo_casa6) + boveda.json + respaldo
+python3 -m fase2.defensa_casa7.preparar_boveda
+
+#    Restaurar desde el respaldo (p. ej. tras un cierre_emergencia):
+python3 -m fase2.defensa_casa7.preparar_boveda --restaurar
+
+# 2. Generar trafico legitimo de prueba contra la Boveda
+python3 -m fase2.defensa_casa7.trafico_legitimo --usuario jefe_casa7 --clave <CLAVE> --limpiar
+
+# 3. Analizar servidor/datos/alertas_red.log para el Post-mortem
+python3 -m fase2.defensa_casa7.analizar_log
+python3 -m fase2.defensa_casa7.analizar_log --ip 10.1.138.XX --solo-alertas
 ```
 
 ## Lista de verificación antes y durante el Asedio

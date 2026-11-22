@@ -17,5 +17,6 @@ servidor/datos/boveda.json
 # Datos sensibles del servidor (se generan en la maquina del lab)
 servidor/datos/usuarios.txt
 servidor/datos/secretos.txt
+fase2/defensa_casa7/respaldo_datos/
 *.pdf
 !Proyecto 2 - Especificación Pública KOOPIS (Casa 7).pdf
