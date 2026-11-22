@@ -136,6 +136,22 @@ class TestDefensa(unittest.TestCase):
             reg.liberar_conexion("10.0.0.8")
             self.assertTrue(log_path.exists())
 
+    def test_registrar_evento_auditoria_sin_bloquear_y_sanitizado(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "alertas.log"
+            reg = RegistroDefensivo(ruta_log=log_path, max_faltas=2)
+
+            for i in range(5):
+                reg.registrar_evento("10.0.0.9", "comando_ok", f"cmd={i}\ninyeccion")
+
+            self.assertFalse(reg.esta_bloqueada("10.0.0.9"))
+            lineas = log_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lineas), 5)
+            self.assertIn("nivel=INFO", lineas[0])
+            self.assertIn("evento=comando_ok", lineas[0])
+            self.assertNotIn("\n", lineas[0])
+            self.assertIn("cmd=0 inyeccion", lineas[0])
+
 
 if __name__ == "__main__":
     unittest.main()

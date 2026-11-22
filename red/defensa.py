@@ -92,16 +92,34 @@ class RegistroDefensivo:
             self._guardar_log(ip, motivo, cantidad, detalle)
             return min(self.demora_base_seg * cantidad, 1.5)
 
-    def _guardar_log(self, ip, motivo, conteo, detalle):
+    def registrar_evento(self, ip, evento, detalle=""):
+        """Anota un evento de auditoria (login, comandos, conexiones) sin sumar faltas."""
+        with self._lock:
+            self._escribir_linea("INFO", ip, evento, detalle)
+
+    def _sanitizar(self, texto, max_len=160):
+        limpio = str(texto).replace("\r", " ").replace("\n", " ").strip()
+        if len(limpio) > max_len:
+            return limpio[:max_len] + "..."
+        return limpio
+
+    def _rotar_si_necesario(self):
         self.ruta_log.parent.mkdir(parents=True, exist_ok=True)
         # Evita que un flood de paquetes malos llene el disco
         if self.ruta_log.exists() and self.ruta_log.stat().st_size > MAX_BYTES_LOG:
             respaldo = self.ruta_log.with_suffix(".log.1")
             self.ruta_log.replace(respaldo)
 
+    def _escribir_linea(self, nivel, ip, evento, detalle="", conteo=None):
+        self._rotar_si_necesario()
         hora = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-        linea = f"[{hora} UTC] ip={ip} motivo={motivo} conteo={conteo}"
+        linea = f"[{hora} UTC] nivel={nivel} ip={ip} evento={evento}"
+        if conteo is not None:
+            linea += f" conteo={conteo}"
         if detalle:
-            linea += f" detalle={detalle}"
+            linea += f" detalle={self._sanitizar(detalle)}"
         with self.ruta_log.open("a", encoding="utf-8") as f:
             f.write(linea + "\n")
+
+    def _guardar_log(self, ip, motivo, conteo, detalle):
+        self._escribir_linea("ALERTA", ip, motivo, detalle=detalle, conteo=conteo)

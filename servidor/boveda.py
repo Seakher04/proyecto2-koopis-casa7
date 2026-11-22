@@ -115,6 +115,7 @@ def manejar_cliente(
 
     sesion = {
         "autenticado": False,
+        "usuario": None,
         "perfil": None,
         "intentos_fallidos": 0,
         "cerrar_servidor": False,
@@ -123,18 +124,30 @@ def manejar_cliente(
     def enviar_respuesta(tipo: int, payload: dict) -> None:
         _enviar_paquete(conn, tipo, secuencia.siguiente_envio(), payload, k_cif, k_int)
 
-    def anotar_falta(motivo: str) -> None:
+    def _texto_log(valor: object, max_len: int = 48) -> str:
+        if not isinstance(valor, str) or not valor:
+            return "-"
+        limpio = valor.replace("\r", " ").replace("\n", " ").strip()
+        return limpio[:max_len] + ("..." if len(limpio) > max_len else "")
+
+    def anotar_evento(evento: str, detalle: str = "") -> None:
+        """Registra actividad relevante de la sesion para auditoria y post-mortem."""
+        if defensa is not None and ip is not None:
+            defensa.registrar_evento(ip, evento, detalle)
+
+    def anotar_falta(motivo: str, detalle: str = "") -> None:
         """Deja el intento inválido en la bitácora de red/defensa.py y frena un poco al cliente."""
         if defensa is not None and ip is not None:
-            time.sleep(defensa.registrar_anomalia(ip, motivo))
+            time.sleep(defensa.registrar_anomalia(ip, motivo, detalle))
 
     conn.settimeout(TIEMPO_SIN_SESION)
+    anotar_evento("conexion_abierta")
     try:
         while True:
             try:
                 tipo, nonce, iv, payload_cifrado, hmac_recibido = recibir_trama(conn)
-            except ErrorProtocolo:
-                anotar_falta("trama_invalida")
+            except ErrorProtocolo as exc:
+                anotar_falta("trama_invalida", str(exc))
                 break
             except OSError:
                 # Conexión cerrada, cortada de golpe o sin actividad
@@ -149,15 +162,16 @@ def manejar_cliente(
                     or not secuencia.validar_recepcion(nonce)
                     or not verificar_hmac(cabecera, payload_cifrado, hmac_recibido, b"")
                 ):
-                    anotar_falta("handshake_invalido")
+                    anotar_falta("handshake_invalido", f"tipo={tipo:#x} nonce={nonce}")
                     break
                 resultado_hs = procesar_handshake(payload_cifrado)
                 if resultado_hs is None:
-                    anotar_falta("handshake_invalido")
+                    anotar_falta("handshake_invalido", "parametros_dh_invalidos")
                     break
 
                 pub_b_hex, k_cif, k_int = resultado_hs
                 handshake_completado = True
+                anotar_evento("handshake_ok")
                 enviar_respuesta(TIPO_HANDSHAKE, {"grupo": 14, "B": pub_b_hex})
                 continue
 
@@ -173,6 +187,7 @@ def manejar_cliente(
                 anotar_falta("handshake_duplicado")
                 break
 
+            esperado = secuencia.seq_esperado
             if not secuencia.validar_recepcion(nonce):
                 enviar_respuesta(
                     TIPO_ERROR,
@@ -181,7 +196,7 @@ def manejar_cliente(
                         "descripcion": "Número de secuencia fuera de orden",
                     },
                 )
-                anotar_falta("nonce_invalido")
+                anotar_falta("nonce_invalido", f"recibido={nonce} esperado={esperado} tipo={tipo:#x}")
                 break
 
             if k_int is None or not verificar_hmac(
@@ -194,7 +209,7 @@ def manejar_cliente(
                         "descripcion": "Firma HMAC inválida",
                     },
                 )
-                anotar_falta("hmac_invalido")
+                anotar_falta("hmac_invalido", f"tipo={tipo:#x} nonce={nonce}")
                 break
 
             try:
@@ -212,12 +227,16 @@ def manejar_cliente(
                         "descripcion": "El payload descifrado no es JSON válido",
                     },
                 )
-                anotar_falta("formato_invalido")
+                anotar_falta("formato_invalido", f"tipo={tipo:#x} nonce={nonce}")
                 break
 
             # 3. Flujo de Login (0x02)
             if tipo == TIPO_LOGIN:
                 if sesion["autenticado"]:
+                    anotar_evento(
+                        "login_duplicado",
+                        f"usuario={_texto_log(sesion['usuario'])} perfil={sesion['perfil']}",
+                    )
                     enviar_respuesta(
                         TIPO_ERROR,
                         {
@@ -240,14 +259,22 @@ def manejar_cliente(
                             "descripcion": "Credenciales inválidas",
                         },
                     )
-                    anotar_falta("credenciales")
+                    anotar_falta(
+                        "credenciales",
+                        f"usuario={_texto_log(usuario)} intento={sesion['intentos_fallidos']}",
+                    )
                     if sesion["intentos_fallidos"] >= 3:
                         break
                     continue
 
                 sesion["autenticado"] = True
+                sesion["usuario"] = usuario
                 sesion["perfil"] = perfil
                 conn.settimeout(TIEMPO_CON_SESION)
+                anotar_evento(
+                    "login_ok",
+                    f"usuario={_texto_log(usuario)} perfil={perfil}",
+                )
                 enviar_respuesta(
                     TIPO_RESPUESTA_OK,
                     {
@@ -261,12 +288,20 @@ def manejar_cliente(
             # 4. Flujo de Comandos (0x03)
             if tipo == TIPO_COMANDO:
                 global _cierre_en_curso
+                cmd_log = _texto_log(payload_dict.get("comando"))
+                clave_log = _texto_log(payload_dict.get("clave"))
+                usr_log = _texto_log(sesion["usuario"])
+                perf_log = sesion["perfil"] or "-"
                 with _candado_boveda:
                     if _cierre_en_curso:
                         break
                     tipo_resp, dict_resp = procesar_comando(payload_dict, sesion)
                     if sesion.get("cerrar_servidor"):
                         _cierre_en_curso = True
+                        anotar_evento(
+                            "cierre_emergencia",
+                            f"usuario={usr_log} perfil={perf_log}",
+                        )
                         try:
                             enviar_respuesta(tipo_resp, dict_resp)
                         except OSError:
@@ -275,6 +310,17 @@ def manejar_cliente(
                         if servidor_sock is not None:
                             servidor_sock.close()
                         sys.exit(0)
+                if tipo_resp == TIPO_RESPUESTA_OK:
+                    anotar_evento(
+                        "comando_ok",
+                        f"usuario={usr_log} perfil={perf_log} comando={cmd_log} clave={clave_log}",
+                    )
+                else:
+                    codigo_err = _texto_log(dict_resp.get("codigo"))
+                    anotar_evento(
+                        "comando_error",
+                        f"usuario={usr_log} perfil={perf_log} comando={cmd_log} codigo={codigo_err}",
+                    )
                 enviar_respuesta(tipo_resp, dict_resp)
                 continue
 
@@ -286,9 +332,13 @@ def manejar_cliente(
                     "descripcion": "Tipo de mensaje no soportado",
                 },
             )
-            anotar_falta("tipo_no_soportado")
+            anotar_falta("tipo_no_soportado", f"tipo={tipo:#x} nonce={nonce}")
             break
     finally:
+        anotar_evento(
+            "conexion_cerrada",
+            f"usuario={_texto_log(sesion['usuario'])} perfil={sesion['perfil'] or '-'}",
+        )
         try:
             conn.close()
         except OSError:

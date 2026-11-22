@@ -10,30 +10,36 @@ Universidad de Costa Rica
 
 ## Estructura
 
+La **Fase 1 (Bóveda KOOPIS)** permanece en los módulos de la raíz para mantener sin cambios los comandos de ejecución y el despliegue de laboratorio; todo el trabajo de **Fase 2 (El Asedio)** vive bajo `fase2/`.
+
 ```text
 .
-├── red/
-│   ├── protocolo.py      # Cabecera !IBQ16s, lectura/envío por TCP
-│   ├── secuencia.py      # Contadores anti-repetición
-│   └── defensa.py        # Límite de conexiones y bitácora de eventos
-├── seguridad/
-│   ├── handshake.py      # Diffie-Hellman (Grupo 14) y derivación de claves
-│   ├── cifrado.py        # Cifrado AES-256-CTR
-│   ├── login.py          # Gestión y verificación PBKDF2-HMAC-SHA256
-│   └── integridad.py     # Cálculo y verificación HMAC-SHA256
-├── servidor/
-│   ├── boveda.py         # Servidor TCP concurrente en puerto 7777
-│   ├── comandos.py       # Procesamiento de comandos y persistencia JSON
-│   └── datos/            # usuarios.txt, boveda.json y alertas_red.log
-├── cliente/
-│   └── custodio.py       # Cliente TCP
-└── pruebas/
-    ├── test_framing.py
-    ├── test_seguridad.py
-    ├── test_integridad.py
-    ├── test_comandos.py
-    ├── test_boveda.py
-    └── test_custodio.py
+├── red/                      # [Fase 1] Capa de red TCP
+│   ├── protocolo.py          # Cabecera !IBQ16s, lectura/envío por TCP
+│   ├── secuencia.py          # Contadores anti-repetición
+│   └── defensa.py            # Límite de conexiones y bitácora de auditoría/alertas
+├── seguridad/                # [Fase 1] Criptografía y autenticación
+│   ├── handshake.py          # Diffie-Hellman (Grupo 14) y derivación de claves
+│   ├── cifrado.py            # Cifrado AES-256-CTR
+│   ├── login.py              # Gestión y verificación PBKDF2-HMAC-SHA256
+│   └── integridad.py         # Cálculo y verificación HMAC-SHA256
+├── servidor/                 # [Fase 1] Bóveda
+│   ├── boveda.py             # Servidor TCP concurrente en puerto 7777
+│   ├── comandos.py           # Procesamiento de comandos y persistencia JSON
+│   └── datos/                # usuarios.txt, boveda.json y alertas_red.log
+├── cliente/                  # [Fase 1] Custodio
+│   └── custodio.py           # Cliente TCP interactivo
+├── pruebas/                  # [Fase 1] Suite unitaria e integración
+│   ├── test_framing.py
+│   ├── test_seguridad.py
+│   ├── test_integridad.py
+│   ├── test_comandos.py
+│   ├── test_boveda.py
+│   └── test_custodio.py
+└── fase2/                    # [Fase 2] El Asedio (Trío: Casa 7 → Casa 5 | Defensa vs Casa 6)
+    ├── README.md             # Guía, checklist y comando tcpdump para el laboratorio
+    ├── ataque_casa5/         # exploits/ y evidencia/ del ataque a Casa 5
+    └── defensa_casa7/        # evidencia/ (logs y capturas) para el post-mortem ante Casa 6
 ```
 
 ## Requisitos e instalación
@@ -97,9 +103,15 @@ python3 -m cliente.custodio <IP_SERVIDOR> 7777
 | `borrar` | Sí | No | No |
 | `cierre_emergencia` | Sí | No | No |
 
+## Bitácora de auditoría y alertas (Fase 2 / Post-mortem)
+
+La Bóveda escribe en `servidor/datos/alertas_red.log` (con rotación automática a 512 KB y sanitización de texto):
+- **`nivel=INFO`**: `conexion_abierta`, `handshake_ok`, `login_ok`, `login_duplicado`, `comando_ok`, `comando_error` (incluye `NO_AUTORIZADO`, `NO_AUTENTICADO`, `SOLICITUD_INVALIDA`, `NO_ENCONTRADO`), `cierre_emergencia` y `conexion_cerrada`. Nunca registra contraseñas ni valores secretos.
+- **`nivel=ALERTA`**: `trama_invalida`, `handshake_invalido`, `handshake_duplicado`, `nonce_invalido`, `hmac_invalido`, `formato_invalido`, `credenciales`, `tipo_no_soportado`, `limite_global`, `limite_por_ip` y `excepcion` (con conteo de faltas y bloqueo temporal por IP).
+
 ## Pruebas
 
-Para ejecutar la suite completa de pruebas unitarias e integración (51 pruebas):
+Para ejecutar la suite completa de pruebas unitarias e integración (52 pruebas):
 
 ```bash
 python3 -m unittest discover -s pruebas -p "test_*.py" -v

@@ -501,6 +501,23 @@ class TestBovedaIntegracion(unittest.TestCase):
                     t.join(timeout=2.0)
 
             self.assertEqual(defensa._conexiones_totales, 0)
+            contenido_log = (
+                os.path.join(tmp_log, "alertas.log")
+            )
+            with open(contenido_log, encoding="utf-8") as f:
+                texto_log = f.read()
+            self.assertIn("evento=conexion_abierta", texto_log)
+            self.assertIn("evento=handshake_ok", texto_log)
+            self.assertIn("evento=login_ok", texto_log)
+            self.assertIn("evento=comando_ok", texto_log)
+            self.assertIn("comando=agregar", texto_log)
+            self.assertIn("comando=consultar", texto_log)
+            self.assertIn("evento=conexion_cerrada", texto_log)
+            # Nunca se deben exponer contraseñas ni valores secretos en el log
+            self.assertNotIn(CLAVE_JEFE, texto_log)
+            self.assertNotIn(CLAVE_INTEGRANTE, texto_log)
+            self.assertNotIn("v1", texto_log)
+            self.assertNotIn("v2", texto_log)
 
 
 if __name__ == "__main__":
