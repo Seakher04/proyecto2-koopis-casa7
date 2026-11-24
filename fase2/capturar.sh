@@ -37,13 +37,13 @@ case "$OBJETIVO" in
     ;;
   casa5)
     PUERTO=6005
-    DIR_SALIDA="$RAIZ_REPO/fase2/ataque_casa5/evidencia"
+    DIR_SALIDA="$RAIZ_REPO/ataque/evidencia"
     PREFIJO="captura_casa5"
     ;;
   *)
     echo "Uso: $0 <casa7|casa5> [interfaz] [--cli]"
     echo "  casa7 -> captura TCP puerto 7777 en fase2/defensa_casa7/evidencia/"
-    echo "  casa5 -> captura TCP puerto 6005 en fase2/ataque_casa5/evidencia/"
+    echo "  casa5 -> captura TCP puerto 6005 en ataque/evidencia/"
     exit 1
     ;;
 esac

@@ -36,10 +36,10 @@ La **Fase 1 (Bóveda KOOPIS)** permanece en los módulos de la raíz para manten
 │   ├── test_comandos.py
 │   ├── test_boveda.py
 │   └── test_custodio.py
-└── fase2/                    # [Fase 2] El Asedio (Trío: Casa 7 → Casa 5 | Defensa vs Casa 6)
-    ├── README.md             # Guía, checklist y comando tcpdump para el laboratorio
-    ├── ataque_casa5/         # exploits/ y evidencia/ del ataque a Casa 5
-    └── defensa_casa7/        # evidencia/ (logs y capturas) para el post-mortem ante Casa 6
+└── fase2/                    # [Fase 2] Defensa de Casa 7 y captura (el ataque a Casa 5 vive en la rama ataqueCasa5)
+    ├── README.md             # Guía, checklist y comandos de defensa/captura
+    ├── capturar.sh           # Lanza Wireshark (o tcpdump) filtrado para casa7 o casa5
+    └── defensa_casa7/        # Herramientas de despliegue, análisis de logs y evidencia/
 ```
 
 ## Requisitos e instalación
