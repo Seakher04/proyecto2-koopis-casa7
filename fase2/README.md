@@ -4,7 +4,7 @@
 
 `Casa 5 → Casa 6 → Casa 7 → Casa 5`
 
-- **Rol atacante:** Casa 7 ataca a **Casa 5** (`ataque/` en rama `ataqueCasa5`).
+- **Rol atacante:** Casa 7 ataca a **Casa 5** (`ataque/` en esta misma rama `Fase2`).
 - **Rol defensor:** Casa 7 defiende su Bóveda KOOPIS ante **Casa 6** (`defensa_casa7/`).
 
 ## Estructura
