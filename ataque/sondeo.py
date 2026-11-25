@@ -83,17 +83,24 @@ def _crudo(host, puerto, datos, espera=1.0):
     except OSError as e:
         return f"no conecto ({e})"
     try:
-        s.sendall(datos)
-        s.settimeout(espera)
         try:
+            s.sendall(datos)
+            s.settimeout(espera)
             r = s.recv(4096)
         except socket.timeout:
             return "sin respuesta (se quedo esperando)"
+        except ConnectionResetError:
+            return "reset de la conexion (RST)"
+        except OSError as e:
+            return f"error de socket ({type(e).__name__})"
         if not r:
             return "corto"
         return f"respondio tipo {casa5.nombre(r[4])}" if len(r) >= 5 else f"respondio {len(r)} bytes"
     finally:
-        s.close()
+        try:
+            s.close()
+        except OSError:
+            pass
 
 
 def test_robustez(host, puerto):
