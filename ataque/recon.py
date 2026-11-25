@@ -41,9 +41,16 @@ def detectar_hello(host, puerto):
             c = _conectar(host, puerto)
             c.handshake()  # si B se parsea a un entero DH valido, este formato sirve
             ok = 2 <= c.K <= casa5.P - 2
+            raw_ack = c.hello_ack_raw or b""
             c.cerrar()
             if ok:
-                print(f"[HELLO] formato detectado: {formato!r}")
+                aviso = ""
+                if formato == "raw" and len(raw_ack) != casa5.LARGO_DH:
+                    aviso = f" [OJO: len(HELLO_ACK)={len(raw_ack)}, esperado {casa5.LARGO_DH}]"
+                print(
+                    f"[HELLO] formato detectado: {formato!r} "
+                    f"(len={len(raw_ack)}, prefijo={raw_ack[:12].hex()}){aviso}"
+                )
                 return True
         except Exception as e:
             print(f"[HELLO] {formato!r} no sirve ({type(e).__name__}: {e})")
@@ -55,8 +62,8 @@ def detectar_hello(host, puerto):
 # Paso 2: esquema de derivacion de claves
 # ---------------------------------------------------------------------------
 
-ESQUEMAS_K = [256, 32]
-ESQUEMAS_ORDEN = ["k_label_dir", "k_dir_label", "k_label"]
+ESQUEMAS_K = [256, "sha256", "min", "hex"]
+ESQUEMAS_ORDEN = ["k_label_dir", "k_dir_label", "k_label", "label_dir_k", "dir_label_k"]
 ESQUEMAS_LABEL = [
     (b"ENC", b"MAC"),
     (b"enc", b"mac"),
@@ -69,53 +76,90 @@ ESQUEMAS_DIR = [
     (b"C2S", b"S2C"),
     (b"", b""),                    # por si no usan direccion
 ]
-ESQUEMAS_HMAC = ["type_iv_ct", "iv_ct"]
+ESQUEMAS_HMAC = ["type_iv_ct", "iv_ct", "ct"]
+ESQUEMAS_LAYOUT = ["iv_ct_mac", "iv_mac_ct", "mac_iv_ct"]
+
+
+def _generar_esquemas():
+    """Genera combinaciones sin redundancias, priorizando layout iv_ct_mac."""
+    combos = []
+    vistos = set()
+    for layout in ESQUEMAS_LAYOUT:
+        for k_bytes in ESQUEMAS_K:
+            for orden in ESQUEMAS_ORDEN:
+                dirs = [(b"", b"")] if orden == "k_label" else ESQUEMAS_DIR
+                for label, dir_par, hmac_in in itertools.product(ESQUEMAS_LABEL, dirs, ESQUEMAS_HMAC):
+                    esq = (k_bytes, orden, label, dir_par, hmac_in, layout)
+                    if esq not in vistos:
+                        vistos.add(esq)
+                        combos.append(esq)
+    return combos
 
 
 def _aplicar(esq):
     (CONFIG.K_BYTES, CONFIG.DERIV_ORDER, (CONFIG.LABEL_ENC, CONFIG.LABEL_MAC),
-     (CONFIG.DIR_C2S, CONFIG.DIR_S2C), CONFIG.HMAC_INPUT) = esq
+     (CONFIG.DIR_C2S, CONFIG.DIR_S2C), CONFIG.HMAC_INPUT, CONFIG.LAYOUT) = esq
 
 
-def _probar_login(host, puerto):
-    """Un handshake real + un LOGIN de prueba. Devuelve (tipo, mac_ok, datos) o None si cerro."""
+def _probar_login(host, puerto, timeout=1.5):
+    """Un handshake real + un LOGIN de prueba. Devuelve ((tipo, mac_ok, datos, raw), estado)."""
     try:
         c = _conectar(host, puerto)
         c.handshake()
         c.enviar_cifrado(casa5.LOGIN, {CONFIG.F_USER: USUARIO, CONFIG.F_PASS: CLAVE})
-        c.sock.settimeout(4.0)
-        r = c.recibir_cifrado()
+        c.sock.settimeout(timeout)
+        tipo, payload = c.recibir()
         c.cerrar()
-        return r
-    except Exception:
-        return None
+        if tipo in (casa5.HELLO, casa5.HELLO_ACK):
+            return (tipo, None, None, payload), "ok"
+        mac_ok, datos = c._abrir(tipo, payload)
+        return (tipo, mac_ok, datos, payload), "ok"
+    except TimeoutError:
+        return None, "timeout"
+    except casa5.ErrorCasa5 as e:
+        return None, f"cerrado ({e})"
+    except Exception as e:
+        return None, f"error ({type(e).__name__}: {e})"
 
 
 def detectar_claves(host, puerto):
-    combos = list(itertools.product(
-        ESQUEMAS_K, ESQUEMAS_ORDEN, ESQUEMAS_LABEL, ESQUEMAS_DIR, ESQUEMAS_HMAC))
+    combos = _generar_esquemas()
     print(f"[CLAVES] probando hasta {len(combos)} esquemas de derivacion...")
     parcial = None
+    conteos = {}
+    vistas_sin_mac = set()
     for i, esq in enumerate(combos, 1):
         _aplicar(esq)
-        r = _probar_login(host, puerto)
+        r, estado = _probar_login(host, puerto)
+        conteos[estado] = conteos.get(estado, 0) + 1
         if r is None:
-            continue  # el servidor cerro: nuestro HMAC no calzo, esquema incorrecto
-        tipo, mac_ok, datos = r
-        etiqueta = (f"K={esq[0]} orden={esq[1]} label={esq[2]} dir={esq[3]} hmac={esq[4]}")
+            if i == 1 and estado == "timeout":
+                print("[CLAVES] aviso: el servidor no responde al LOGIN (timeout); las pruebas pueden tardar.")
+            continue
+        tipo, mac_ok, datos, raw = r
+        etiqueta = (
+            f"K={esq[0]} orden={esq[1]} label={esq[2]} dir={esq[3]} "
+            f"hmac={esq[4]} layout={esq[5]}"
+        )
         if mac_ok or datos is not None:
             print(f"[CLAVES] candidato ({casa5.nombre(tipo)}) -> {etiqueta}")
             if tipo in (casa5.LOGIN_OK, casa5.LOGIN_FAIL):
                 print("[CLAVES] CONFIRMADO: el servidor proceso el LOGIN con estas claves.")
                 return esq
             parcial = parcial or esq  # ERR_MSG: claves ok, pero el esquema JSON falla
-        if i % 24 == 0:
+        elif tipo not in vistas_sin_mac:
+            vistas_sin_mac.add(tipo)
+            print(
+                f"[CLAVES] respuesta sin descifrar/sin HMAC valido: "
+                f"tipo={casa5.nombre(tipo)} len={len(raw)} hex={raw[:32].hex()}"
+            )
+        if i % 60 == 0:
             print(f"   ...{i}/{len(combos)}")
     if parcial:
         _aplicar(parcial)
         print("[CLAVES] claves validas, pero el LOGIN dio error. Revisar nombres de campos JSON.")
         return parcial
-    print("[CLAVES] ningun esquema funciono. El servidor valida distinto o cierra siempre.")
+    print(f"[CLAVES] ningun esquema funciono. Resumen de respuestas: {conteos}")
     return None
 
 
@@ -164,7 +208,7 @@ def detectar_campos_login(host, puerto):
 def sesion_de_prueba(host, puerto):
     c = _conectar(host, puerto)
     c.handshake()
-    print(f"[SESION] handshake ok, K (primeros 16 hex) = {c.K.to_bytes(CONFIG.K_BYTES,'big')[:8].hex()}")
+    print(f"[SESION] handshake ok, K (primeros 16 hex) = {casa5._serializar_k(c.K, CONFIG.K_BYTES)[:8].hex()}")
     tipo, mac_ok, datos = c.login(USUARIO, CLAVE)
     print(f"[SESION] LOGIN -> {casa5.nombre(tipo)}  mac_ok={mac_ok}")
     print(f"[SESION] respuesta completa del servidor: {datos}")
@@ -178,7 +222,7 @@ def sesion_de_prueba(host, puerto):
 def imprimir_config():
     print("\n==================== CONFIG GANADOR ====================")
     for k in ("HS_FORMAT", "K_BYTES", "DERIV_ORDER", "LABEL_ENC", "LABEL_MAC",
-              "DIR_C2S", "DIR_S2C", "HMAC_INPUT", "F_USER", "F_PASS"):
+              "DIR_C2S", "DIR_S2C", "HMAC_INPUT", "LAYOUT", "F_USER", "F_PASS"):
         print(f"    CONFIG.{k} = {getattr(CONFIG, k)!r}")
     print("=======================================================\n")
 
@@ -197,7 +241,7 @@ def main():
     if esq is None:
         return
     # Si el LOGIN no fue aceptado aun, calibrar los nombres de los campos.
-    r = _probar_login(host, puerto)
+    r, _ = _probar_login(host, puerto)
     if not (r and r[0] in (casa5.LOGIN_OK, casa5.LOGIN_FAIL)):
         detectar_campos_login(host, puerto)
 

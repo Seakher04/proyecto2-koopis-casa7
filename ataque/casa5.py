@@ -162,10 +162,26 @@ def _concat(kb, label, direccion, orden):
     return kb + label + direccion
 
 
+def _serializar_k(K, modo):
+    if modo == 256:
+        return K.to_bytes(256, "big")
+    if modo == 32:
+        if K.bit_length() <= 256:
+            return K.to_bytes(32, "big")
+        return hashlib.sha256(K.to_bytes(256, "big")).digest()
+    if modo == "sha256":
+        return hashlib.sha256(K.to_bytes(256, "big")).digest()
+    if modo == "min":
+        return K.to_bytes(max(1, (K.bit_length() + 7) // 8), "big")
+    if modo == "hex":
+        return format(K, "x").encode("ascii")
+    return K.to_bytes(int(modo), "big")
+
+
 def derivar_claves(K):
     """De K saca 4 claves de 32 bytes: (enc_c2s, mac_c2s, enc_s2c, mac_s2c).
     c2s = lo que el cliente usa para enviar; s2c = lo que usa para leer al servidor."""
-    kb = K.to_bytes(CONFIG.K_BYTES, "big")
+    kb = _serializar_k(K, CONFIG.K_BYTES)
 
     def H(label, direccion):
         return hashlib.sha256(_concat(kb, label, direccion, CONFIG.DERIV_ORDER)).digest()
@@ -223,6 +239,7 @@ class ClienteCasa5:
         self.seq = 0            # contador anti-repeticion del cliente
         self.token = None       # lo entrega el servidor en LOGIN_OK
         self.K = None           # secreto compartido (para depurar)
+        self.hello_ack_raw = None
 
     # -- conexion --
     def conectar(self):
@@ -272,6 +289,7 @@ class ClienteCasa5:
 
         self.enviar(HELLO, self._payload_hello(A))
         tipo, payload = self.recibir()
+        self.hello_ack_raw = payload
         if tipo != HELLO_ACK:
             raise ErrorCasa5(f"Se esperaba HELLO_ACK, llego {nombre(tipo)}")
 
@@ -289,10 +307,21 @@ class ClienteCasa5:
         iv = secrets.token_bytes(16)
         ct = aes_cbc_cifrar(self.enc_c2s, iv, json.dumps(dict_json).encode("utf-8"))
         tag = calcular_hmac(self.mac_c2s, tipo, iv, ct)
+        if CONFIG.LAYOUT == "mac_iv_ct":
+            return tag + iv + ct
+        if CONFIG.LAYOUT == "iv_mac_ct":
+            return iv + tag + ct
         return iv + ct + tag  # LAYOUT iv_ct_mac
 
     def _abrir(self, tipo, payload):
-        iv, ct, tag = payload[:16], payload[16:-32], payload[-32:]
+        if len(payload) < 48:
+            return False, None
+        if CONFIG.LAYOUT == "mac_iv_ct":
+            tag, iv, ct = payload[:32], payload[32:48], payload[48:]
+        elif CONFIG.LAYOUT == "iv_mac_ct":
+            iv, tag, ct = payload[:16], payload[16:48], payload[48:]
+        else:
+            iv, ct, tag = payload[:16], payload[16:-32], payload[-32:]
         esperado = calcular_hmac(self.mac_s2c, tipo, iv, ct)
         mac_ok = hmac.compare_digest(esperado, tag)
         texto = None
