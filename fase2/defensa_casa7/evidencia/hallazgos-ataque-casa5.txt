@@ -1,0 +1,63 @@
+INFORME DE HALLAZGOS - ATAQUE A LA CASA 5 (LA RATONERA)
+Proyecto Practico 2, Redes de Comunicacion de Datos (CI-0121)
+Objetivo: Boveda de la Casa 5, 10.1.35.19:6005
+Fecha: 25 de noviembre de 2026
+
+
+RESUMEN
+
+El ataque se concentro en la capa de handshake Diffie-Hellman y de framing, que es
+alcanzable sin conocer las claves de sesion. El login a la boveda no se pudo completar
+porque la derivacion de claves de la Casa 5 (los strings exactos del KDF) no esta
+especificada en su documento publico, asi que el cliente invitado no pudo autenticarse.
+Aun asi, el handshake por si solo revela varias fallas de validacion, y todas se
+confirmaron contra el servidor real.
+
+
+VULNERABILIDADES CONFIRMADAS
+
+1. El servidor no valida el valor publico A del intercambio Diffie-Hellman.
+   Al enviar A = 0, A = 1, A = P-1 y A = P, el servidor responde HELLO_ACK en todos los
+   casos. Con esos valores el secreto compartido K queda fijo y conocido. Por ejemplo,
+   con A = 0 el servidor calcula K = 0 sin importar su propio secreto. Es el ataque de
+   clave Diffie-Hellman invalida (small-subgroup).
+   Impacto: si la derivacion de claves estuviera disponible, esto permitiria derivar las
+   claves de sesion y autenticarse sin hacer el intercambio real.
+
+2. El servidor no valida el tipo del primer mensaje.
+   Un frame con tipo 0x99 (desconocido) enviado como primer mensaje recibe un HELLO_ACK.
+   El servidor no exige que la sesion empiece con un HELLO (0x01).
+
+3. El servidor no valida la longitud del valor A.
+   Un HELLO con un A de 1 byte, en lugar de los 256 bytes que fija el protocolo, es
+   aceptado y responde HELLO_ACK.
+
+4. El servidor resetea la conexion (RST) ante datos basura.
+   Al recibir bytes arbitrarios, el servidor corta con un reset en vez de cerrar de forma
+   limpia o devolver un codigo de error. Es un hallazgo menor de manejo de errores.
+
+
+COMPORTAMIENTOS CORRECTOS (NO VULNERABLES)
+
+1. La clave publica del servidor (B) es efimera. Cambia en cada conexion, o sea que el
+   servidor no reusa su secreto Diffie-Hellman.
+2. El servidor sobrevive a los frames mal formados. Sigue atendiendo despues del fuzz.
+3. Un cliente mudo no bloquea al servidor. Un segundo cliente es atendido mientras el
+   primero queda colgado, o sea que el servidor atiende de forma concurrente.
+
+
+ALCANCE
+
+No se logro leer la boveda. El login va cifrado con una derivacion de claves cuyos
+strings exactos la Casa 5 no publico, asi que el cliente invitado no pudo autenticarse.
+La vulnerabilidad 1 seria explotable a fondo si ese dato estuviera disponible, dado que
+con A = 0 el secreto compartido queda en cero y la sesion se derivaria por completo.
+
+
+METODO
+
+Las pruebas se hicieron con el script sondeo.py, que ataca el handshake y el framing sin
+necesitar las claves de sesion. El formato del handshake se detecto antes con recon.py
+(HELLO en formato raw, B de 256 bytes). La derivacion de claves se intento calibrar con
+recon.py probando mas de tres mil esquemas, y el servidor cerro la conexion en todos, lo
+que confirma que el KDF usa strings o una serializacion fuera de lo documentado.
