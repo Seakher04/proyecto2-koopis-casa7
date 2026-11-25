@@ -78,10 +78,15 @@ LOCK = threading.Lock()
 
 
 def _leer_A(payload):
+    # Mismo formato que manda el cliente (CONFIG.HS_FORMAT): raw = 256 bytes big-endian.
+    if CONFIG.HS_FORMAT == "raw":
+        return int.from_bytes(payload, "big")
     return int(json.loads(payload.decode())[CONFIG.HS_FIELD_A], 16)
 
 
 def _payload_B(B):
+    if CONFIG.HS_FORMAT == "raw":
+        return B.to_bytes(casa5.LARGO_DH, "big")
     return json.dumps({CONFIG.HS_FIELD_B: format(B, "x")}).encode()
 
 
@@ -161,7 +166,7 @@ def atender(conn, d, vault):
                 clave = datos.get(CONFIG.F_KEY, "")
                 if tipo == casa5.CMD_ASK:
                     with LOCK:
-                        if clave == "":
+                        if clave == "" or clave == 0:   # "" (mock) o pagina=0 (Casa 5 real): vuelca todo
                             enviar(casa5.RET_OK, {CONFIG.F_VALUE: dict(vault)})
                         elif clave in vault:
                             enviar(casa5.RET_OK, {CONFIG.F_VALUE: vault[clave]})

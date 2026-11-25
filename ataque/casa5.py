@@ -78,32 +78,35 @@ class CONFIG:
     """Los detalles que el enunciado NO fija. recon.py los ajusta; aqui estan los valores
     de arranque mas probables segun el enunciado y las convenciones del curso."""
 
-    # HELLO: como viaja A (y B). "json" => {"A": "<hex>"} ; "raw" => 256 bytes big-endian.
-    HS_FORMAT = "json"
+    # Valores EXACTOS de la Casa 5 (leidos de su codigo: core/handshake.py,
+    # core/derivacion.py, core/integridad.py, cliente.py).
+
+    # HELLO: A y B viajan como enteros de 256 bytes big-endian (raw).
+    HS_FORMAT = "raw"
     HS_FIELD_A = "A"
     HS_FIELD_B = "B"
 
-    # Derivacion de claves. Cuantos bytes se serializa K antes del SHA-256 (256 o 32).
+    # Derivacion: sha256(ETIQUETA + K.to_bytes(256)). La etiqueta va pegada a la
+    # direccion con guion ("ENC-CS", "MAC-SC", ...) y ANTES de K.
     K_BYTES = 256
-    LABEL_ENC = b"ENC"
-    LABEL_MAC = b"MAC"
-    DIR_C2S = b"Cliente->Servidor"
-    DIR_S2C = b"Servidor->Cliente"
-    # Orden al concatenar antes del hash: k, etiqueta y direccion.
-    DERIV_ORDER = "k_label_dir"
+    LABEL_ENC = b"ENC-"
+    LABEL_MAC = b"MAC-"
+    DIR_C2S = b"CS"
+    DIR_S2C = b"SC"
+    DERIV_ORDER = "label_dir_k"   # etiqueta + direccion + K
 
     # Payload cifrado: IV(16) || ciphertext || HMAC(32).
     LAYOUT = "iv_ct_mac"
     # Que entra al HMAC: el byte de tipo, el IV y el ciphertext.
     HMAC_INPUT = "type_iv_ct"
 
-    # Nombres de los campos dentro del JSON (login y comandos).
+    # Nombres de los campos del JSON (del codigo de la Casa 5).
     F_USER = "usuario"
-    F_PASS = "clave"
+    F_PASS = "contrasena"
     F_TOKEN = "token"
     F_SEQ = "seq"
-    F_KEY = "clave_dato"   # llave del dato en la boveda (consultar/agregar/borrar)
-    F_VALUE = "valor"
+    F_KEY = "pagina"   # CMD_ASK usa {"pagina": N}; CMD_ADD usa "dato", CMD_DEL "id_dato"
+    F_VALUE = "dato"
 
 
 class ErrorCasa5(Exception):

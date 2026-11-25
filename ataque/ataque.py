@@ -36,8 +36,8 @@ def sesion_invitado(ip, puerto):
             tipo, mac_ok, datos = c.login(USUARIO, CLAVE)
             mostrar("LOGIN", tipo, mac_ok, datos)
             if tipo == casa5.LOGIN_OK:
-                tipo, mac_ok, datos = c.comando(casa5.CMD_ASK, **{CONFIG.F_KEY: ""})
-                mostrar("CMD_ASK('')", tipo, mac_ok, datos)
+                tipo, mac_ok, datos = c.comando(casa5.CMD_ASK, **{CONFIG.F_KEY: 0})
+                mostrar("CMD_ASK(pagina=0)", tipo, mac_ok, datos)
     except Exception as e:
         print(f"  fallo la sesion normal ({type(e).__name__}: {e})")
 
@@ -54,7 +54,7 @@ def una_inyeccion(ip, puerto, etiqueta, A, K):
             tipo, mac_ok, datos = c.login(USUARIO, CLAVE)
             mostrar(etiqueta, tipo, mac_ok, datos)
             if tipo == casa5.LOGIN_OK:
-                tipo, mac_ok, datos = c.comando(casa5.CMD_ASK, **{CONFIG.F_KEY: ""})
+                tipo, mac_ok, datos = c.comando(casa5.CMD_ASK, **{CONFIG.F_KEY: 0})
                 mostrar(etiqueta + " CMD_ASK", tipo, mac_ok, datos)
     except casa5.ErrorCasa5 as e:
         print(f"  {etiqueta}: la conexion se cerro ({e})")
